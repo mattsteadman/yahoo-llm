@@ -240,7 +240,7 @@ def main():
                 "effective_batch_size": BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS,
                 "learning_rate": LEARNING_RATE,
                 "epochs": NUM_EPOCHS,
-                "max_length": 256,
+                "max_seq_length": 256,
                 "lora_r": 16,
                 "lora_alpha": 32,
                 "random_seed": RANDOM_SEED,
@@ -307,6 +307,9 @@ def main():
     print(f"\nLoading tokenizer: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
+    tokenizer.pad_token = "<|im_end|>"
+    tokenizer.eos_token = "<|im_end|>"
+
     # Ensure the tokenizer has a padding token (needed for batching variable-length sequences).
     # Some models don't define this by default, so we use the EOS token as padding.
     if tokenizer.pad_token is None:
@@ -344,6 +347,9 @@ def main():
         device_map="auto",
         trust_remote_code=True,
     )
+
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.eos_token_id = tokenizer.eos_token_id
 
     # Prepare the quantized model for training by freezing base weights and
     # preparing LoRA layers for gradient computation.
@@ -439,7 +445,7 @@ def main():
         gradient_checkpointing=True,
         # --- SFT-specific bits ---
         # Your Yahoo questions are short; 256 is a nice speed/coverage trade-off.
-        max_length=256,
+        max_seq_length=256,
         dataset_text_field="text",  # your formatted dataset column
         # For Qwen2.5 Instruct with ChatML, TRL docs recommend aligning eos_token
         # with the chat template end token:
