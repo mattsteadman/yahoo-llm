@@ -229,6 +229,7 @@ def main():
 
     if WANDB_PROJECT:
         wandb.init(
+            entity="stead",
             project=WANDB_PROJECT,
             name=f"qwen-1.5b-{SAMPLE_SIZE // 1000}k-samples",  # Run name in wandb
             config={
