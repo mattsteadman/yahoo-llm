@@ -240,7 +240,7 @@ def main():
                 "effective_batch_size": BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS,
                 "learning_rate": LEARNING_RATE,
                 "epochs": NUM_EPOCHS,
-                "max_seq_length": 256,
+                "max_length": 256,
                 "lora_r": 16,
                 "lora_alpha": 32,
                 "random_seed": RANDOM_SEED,
@@ -481,10 +481,10 @@ def main():
         # processing_class: The new parameter name for tokenizer in recent TRL versions
         # Used for tokenizing the text data on-the-fly during training
         processing_class=tokenizer,
-        # max_seq_length: Maximum sequence length for training
+        # max_length: Maximum sequence length for training
         # 256 captures 99.44% of questions (avg: 66 tokens, 95th percentile: 147 tokens)
         # Only extreme outliers get truncated, while saving ~40-50% training time vs 512
-        max_seq_length=256,
+        max_length=256,
     )
 
     # ============================================================================
