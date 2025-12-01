@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Fine-tune a small LLM on Yahoo Answers data to make it talk like Yahoo Answers users.
+Fine-tune a small LLM to ASK QUESTIONS like Yahoo Answers users (not answer them).
+Local testing version with minimal samples for quick verification.
 Uses SFT (Supervised Fine-Tuning) with LoRA for efficient training.
 """
 
-import sys
 import platform
 import torch
 from datasets import load_dataset
@@ -29,13 +29,21 @@ except (ImportError, ModuleNotFoundError):
     USE_QUANTIZATION = False
 
 
-def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers", config="title-question-answer-pair", sample_size=None):
-    """Load the Yahoo Answers dataset and explore it."""
-    print(f"Loading dataset: {dataset_name} ({config})")
-    dataset = load_dataset(dataset_name, config)
+def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers", sample_size=None):
+    """
+    Load the Yahoo Answers dataset and prepare it for question-style training.
+
+    Uses the 'title-question-pair' config which contains:
+    - title: The question title
+    - questions: The question body/elaboration
+    """
+    print(f"Loading dataset: {dataset_name}")
+
+    # Use title-question-pair to get complete questions with title + body
+    dataset = load_dataset(dataset_name, "title-question-pair")
 
     print(f"\nDataset structure: {dataset}")
-    print(f"\nTrain split size: {len(dataset['train'])}")
+    print(f"Train split size: {len(dataset['train']):,}")
 
     # Show a sample
     sample = dataset['train'][0]
@@ -45,38 +53,42 @@ def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers",
 
     # Use a subset for faster training if specified
     if sample_size and sample_size < len(dataset['train']):
-        print(f"\nUsing subset of {sample_size} examples for training")
+        print(f"\nUsing subset of {sample_size:,} examples for training")
         indices = random.sample(range(len(dataset['train'])), sample_size)
         dataset['train'] = dataset['train'].select(indices)
 
     return dataset
 
 
-def format_yahoo_answer(example):
+def format_question_style(example):
     """
-    Format a Yahoo Answers example into a conversational prompt.
-    The model learns to respond like a Yahoo Answers user.
-    """
-    question = example['question']
-    answer = example['answer']
+    Format training examples for SFT (Supervised Fine-Tuning).
 
-    # Format: Question -> Answer (Yahoo Answers style)
-    # We'll train the model to generate the answer given the question
-    text = f"""<|user|>
-{question}
-<|assistant|>
-{answer}"""
+    Teaches the model to generate Yahoo Answers-style questions when prompted
+    with "Ask a question". Uses ChatML format (Qwen 2.5's native format):
+    - <|im_start|>user / <|im_end|>: User prompt
+    - <|im_start|>assistant / <|im_end|>: Model response
+    """
+    title = example['title']
+    question_body = example['questions']
+
+    # Combine title and body to create the full Yahoo Answers-style question
+    # Using ChatML format which is Qwen 2.5's native chat template
+    text = f"""<|im_start|>user
+Ask a question<|im_end|>
+<|im_start|>assistant
+{title} {question_body}<|im_end|>"""
 
     return {"text": text}
 
 
 def main():
     # Configuration
-    MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"  # 1.5B parameters, good for Yahoo Answers style
-    OUTPUT_DIR = "./yahoo-answers-model"
+    MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+    OUTPUT_DIR = "./yahoo-questions-model"
     DATASET_NAME = "sentence-transformers/yahoo-answers"
 
-    # Training hyperparameters
+    # Training hyperparameters (minimal for quick local testing)
     SAMPLE_SIZE = 10  # Tiny sample for quick testing
     MAX_SEQ_LENGTH = 256
     BATCH_SIZE = 2
@@ -86,7 +98,8 @@ def main():
     MAX_STEPS = 3  # Only 3 steps for very quick test
 
     print("=" * 60)
-    print("Yahoo Answers LLM Fine-tuning")
+    print("Yahoo Answers QUESTION Style LLM Fine-tuning")
+    print("Local Testing Version")
     print("=" * 60)
     print(f"Platform: {platform.system()} {platform.machine()}")
     print(f"PyTorch: {torch.__version__}")
@@ -99,12 +112,12 @@ def main():
     # Format dataset
     print("\nFormatting dataset for SFT...")
     formatted_dataset = dataset['train'].map(
-        format_yahoo_answer,
+        format_question_style,
         remove_columns=dataset['train'].column_names
     )
 
     # Show formatted sample
-    print("\nFormatted sample:")
+    print("\nFormatted sample (first 500 chars):")
     print(formatted_dataset[0]['text'][:500])
 
     # Load tokenizer
@@ -185,6 +198,7 @@ def main():
         args=training_args,
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
+        max_seq_length=MAX_SEQ_LENGTH,
     )
 
     # Train
@@ -199,7 +213,8 @@ def main():
     tokenizer.save_pretrained(OUTPUT_DIR)
 
     print(f"\n✓ Training complete! Model saved to: {OUTPUT_DIR}")
-    print("\nTo use the model, run: python inference.py")
+    print("\nThe model now talks like Yahoo Answers QUESTIONERS!")
+    print("\nTo test the model, run: python src/test_question_model.py")
 
 
 if __name__ == "__main__":

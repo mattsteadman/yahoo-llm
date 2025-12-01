@@ -64,10 +64,11 @@ def format_question_style_v1(example):
     question_body = example['questions']
 
     # Train model to expand title into full question
-    text = f"""<|user|>
-Expand this into a detailed question: {title}
-<|assistant|>
-{title} {question_body}"""
+    # Using ChatML format (Qwen 2.5's native format)
+    text = f"""<|im_start|>user
+Expand this into a detailed question: {title}<|im_end|>
+<|im_start|>assistant
+{title} {question_body}<|im_end|>"""
 
     return {"text": text}
 
@@ -80,10 +81,11 @@ def format_question_style_v2(example):
     title = example['title']
     question_body = example['questions']
 
-    text = f"""<|user|>
-Write a detailed question about: {title}
-<|assistant|>
-{question_body}"""
+    # Using ChatML format (Qwen 2.5's native format)
+    text = f"""<|im_start|>user
+Write a detailed question about: {title}<|im_end|>
+<|im_start|>assistant
+{question_body}<|im_end|>"""
 
     return {"text": text}
 
@@ -97,11 +99,11 @@ def format_question_style_v3(example):
     question_body = example['questions']
 
     # Simple: given a topic, generate a question in Yahoo Answers style
-    # Extract a keyword from title for variety
-    text = f"""<|user|>
-Ask a question
-<|assistant|>
-{title} {question_body}"""
+    # Using ChatML format (Qwen 2.5's native format)
+    text = f"""<|im_start|>user
+Ask a question<|im_end|>
+<|im_start|>assistant
+{title} {question_body}<|im_end|>"""
 
     return {"text": text}
 

@@ -20,7 +20,7 @@ print("\nGenerating Yahoo Answers-style questions...\n")
 
 # Generate several questions
 for i in range(5):
-    prompt = "<|user|>\nAsk a question\n<|assistant|>\n"
+    prompt = "<|im_start|>user\nAsk a question<|im_end|>\n<|im_start|>assistant\n"
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     outputs = model.generate(
@@ -33,7 +33,11 @@ for i in range(5):
     )
 
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    question = response.split("<|assistant|>")[-1].strip()
+    # Extract just the generated question (everything after "Ask a question")
+    if "Ask a question" in response:
+        question = response.split("Ask a question")[-1].strip()
+    else:
+        question = response.strip()
 
     print(f"{i+1}. {question}\n")
 
