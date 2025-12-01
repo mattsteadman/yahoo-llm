@@ -145,7 +145,7 @@ def main():
                 "effective_batch_size": BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS,
                 "learning_rate": LEARNING_RATE,
                 "epochs": NUM_EPOCHS,
-                "max_seq_length": 256,
+                "max_length": 256,
                 "lora_r": 16,
                 "lora_alpha": 32,
                 "random_seed": RANDOM_SEED,
@@ -299,7 +299,7 @@ def main():
         report_to="wandb" if WANDB_PROJECT else "none",
         gradient_checkpointing=True,
         # SFT-specific
-        max_seq_length=256,
+        max_length=256,
         dataset_text_field="text",
         eos_token=tokenizer.eos_token,
     )
