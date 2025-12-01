@@ -21,9 +21,9 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
     set_seed,
 )
+from trl import SFTTrainer, SFTConfig
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTTrainer
 import random
@@ -407,58 +407,44 @@ def main():
     # ============================================================================
 
     # Configuration for the Hugging Face Trainer
-    training_args = TrainingArguments(
+    # ============================================================================
+    # TRAINING ARGUMENTS (TRL SFTConfig)
+    # ============================================================================
+
+    # SFTConfig extends HF TrainingArguments with SFT-specific options like max_length,
+    # dataset_text_field, eos_token, packing, etc.
+    training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
         logging_steps=LOGGING_STEPS,
-        seed=RANDOM_SEED,  # Ensure trainer uses the same seed
-        data_seed=RANDOM_SEED,  # Seed for data shuffling
-        # Save strategy: Save checkpoints every N steps
+        seed=RANDOM_SEED,
+        data_seed=RANDOM_SEED,
         save_strategy="steps",
         save_steps=SAVE_STEPS,
-        # save_total_limit: Keep only the last 3 checkpoints to save disk space
-        # Older checkpoints are automatically deleted. This is important on RunPod
-        # where storage costs money.
         save_total_limit=3,
-        # Evaluation strategy: Run validation every N steps
-        # Helps detect overfitting - if val loss diverges from train loss, model is memorizing
         eval_strategy="steps",
-        eval_steps=SAVE_STEPS,  # Evaluate at same frequency as saving
-        # load_best_model_at_end: After training, load the checkpoint with best validation loss
-        # Ensures we use the model that generalizes best, not just the final epoch
+        eval_steps=SAVE_STEPS,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",  # Use validation loss to determine "best"
-        greater_is_better=False,  # Lower loss is better
-        # optim: Optimizer choice
-        # paged_adamw_8bit uses 8-bit optimizer states (further memory savings)
-        # Required when using 4-bit quantization (QLoRA)
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         optim="paged_adamw_8bit",
-        # bf16: Use bfloat16 mixed precision training
-        # Faster than fp32, more stable than fp16, supported on modern GPUs (Ampere+)
         bf16=True,
-        # max_grad_norm: Clip gradients to this max norm to prevent exploding gradients
-        # 0.3 is conservative but safe, prevents training instability
         max_grad_norm=0.3,
-        # warmup_ratio: Fraction of training to use for learning rate warmup
-        # 0.03 = first 3% of training steps have increasing LR (from 0 to LEARNING_RATE)
-        # Helps stabilize early training when model is far from optimal
         warmup_ratio=0.03,
-        # lr_scheduler_type: How learning rate changes over training
-        # "cosine" gradually decreases LR following a cosine curve, works well for fine-tuning
-        # Prevents over-aggressive updates near end of training
         lr_scheduler_type="cosine",
-        # report_to: Where to log metrics
-        # "wandb" logs to Weights & Biases for experiment tracking and visualization
-        # Set to "none" if you want to disable external logging
         report_to="wandb" if WANDB_PROJECT else "none",
-        # gradient_checkpointing: Trade compute for memory
-        # Recomputes activations during backward pass instead of storing them
-        # Increases training time by ~20% but saves significant VRAM
-        # Essential for training larger models on consumer GPUs
         gradient_checkpointing=True,
+        # --- SFT-specific bits ---
+        # Your Yahoo questions are short; 256 is a nice speed/coverage trade-off.
+        max_length=256,
+        dataset_text_field="text",  # your formatted dataset column
+        # For Qwen2.5 Instruct with ChatML, TRL docs recommend aligning eos_token
+        # with the chat template end token:
+        # https://huggingface.co/docs/trl/v0.24.0/en/sft_trainer#instruction-tuning-example
+        eos_token="<|im_end|>",
     )
 
     # ============================================================================
@@ -484,7 +470,6 @@ def main():
         # max_length: Maximum sequence length for training
         # 256 captures 99.44% of questions (avg: 66 tokens, 95th percentile: 147 tokens)
         # Only extreme outliers get truncated, while saving ~40-50% training time vs 512
-        max_length=256,
     )
 
     # ============================================================================
