@@ -1,0 +1,22 @@
+[project]
+name = "yahoo-llm"
+version = "0.1.0"
+description = "Fine-tune a small LLM to talk like Yahoo Answers users"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.36.0",
+    "datasets>=2.14.0",
+    "trl>=0.7.0",
+    "peft>=0.7.0",
+    "accelerate>=0.25.0",
+    "sentencepiece",
+    "protobuf",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
