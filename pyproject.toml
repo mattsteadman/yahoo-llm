@@ -14,6 +14,7 @@ dependencies = [
     "protobuf",
     "wandb",
     "hf-transfer>=0.1.9",
+    "bitsandbytes>=0.48.0 ; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 
 [tool.setuptools]
