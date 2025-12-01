@@ -240,10 +240,14 @@ def main():
         trust_remote_code=True,
     )
 
-    # Align model config with tokenizer
     model.config.pad_token_id = tokenizer.pad_token_id
-    if tokenizer.eos_token_id is not None:
-        model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.bos_token_id = tokenizer.bos_token_id
+
+    if hasattr(model, "generation_config"):
+        model.generation_config.pad_token_id = model.config.pad_token_id
+        model.generation_config.eos_token_id = model.config.eos_token_id
+        model.generation_config.bos_token_id = model.config.bos_token_id
 
     # Prepare for k-bit training
     model = prepare_model_for_kbit_training(model)
