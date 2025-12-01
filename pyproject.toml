@@ -12,6 +12,7 @@ dependencies = [
     "accelerate>=0.25.0",
     "sentencepiece",
     "protobuf",
+    "wandb",
 ]
 
 [tool.setuptools]

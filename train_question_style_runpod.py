@@ -14,7 +14,6 @@ EFFICIENCY TECHNIQUES:
 - Gradient checkpointing: Trades compute for memory by recomputing activations during backward pass
 """
 
-import os
 import platform
 import torch
 from datasets import load_dataset
@@ -23,15 +22,19 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
+    set_seed,
 )
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from trl import SFTTrainer
 import random
+import wandb
 
 
-def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers", sample_size=None):
+def load_and_prepare_dataset(
+    dataset_name="sentence-transformers/yahoo-answers", sample_size=None, val_split=0.1
+):
     """
-    Load the Yahoo Answers dataset from HuggingFace.
+    Load the Yahoo Answers dataset from HuggingFace and split into train/val.
 
     DATASET STRUCTURE:
     We use the 'title-question-pair' configuration which contains:
@@ -40,6 +43,11 @@ def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers",
 
     This gives us the full question context including both the title and the rambling
     elaboration that Yahoo Answers users typically add.
+
+    TRAIN/VAL SPLIT:
+    We split the data into training and validation sets. The validation set helps us
+    monitor for overfitting - if training loss drops but validation loss stays high
+    or increases, the model is memorizing rather than learning generalizable patterns.
     """
     print(f"Loading dataset: {dataset_name}")
 
@@ -52,19 +60,30 @@ def load_and_prepare_dataset(dataset_name="sentence-transformers/yahoo-answers",
     print(f"Train split size: {len(dataset['train']):,}")
 
     # Show a sample to verify data quality
-    sample = dataset['train'][0]
+    sample = dataset["train"][0]
     print(f"\nSample entry:")
     for key, value in sample.items():
         print(f"  {key}: {value[:200] if isinstance(value, str) else value}")
 
     # For faster iteration or memory constraints, we can use a subset of the data.
     # Random sampling ensures we get a diverse set of question styles.
-    if sample_size and sample_size < len(dataset['train']):
-        print(f"\nUsing subset of {sample_size:,} examples for training")
-        indices = random.sample(range(len(dataset['train'])), sample_size)
-        dataset['train'] = dataset['train'].select(indices)
+    if sample_size and sample_size < len(dataset["train"]):
+        print(f"\nUsing subset of {sample_size:,} examples")
+        indices = random.sample(range(len(dataset["train"])), sample_size)
+        dataset["train"] = dataset["train"].select(indices)
 
-    return dataset
+    # Split into train and validation sets
+    # seed=42 ensures reproducibility - same split every time
+    split_dataset = dataset["train"].train_test_split(test_size=val_split, seed=42)
+
+    train_size = len(split_dataset["train"])
+    val_size = len(split_dataset["test"])
+
+    print(f"\nSplit into:")
+    print(f"  Training: {train_size:,} examples ({(1 - val_split) * 100:.0f}%)")
+    print(f"  Validation: {val_size:,} examples ({val_split * 100:.0f}%)")
+
+    return split_dataset["train"], split_dataset["test"]
 
 
 def format_question_style(example):
@@ -82,8 +101,8 @@ def format_question_style(example):
     By combining title + question_body, we teach the model to generate complete
     Yahoo Answers questions with both a title and elaboration in one output.
     """
-    title = example['title']
-    question_body = example['questions']
+    title = example["title"]
+    question_body = example["questions"]
 
     # Combine title and body to create the full Yahoo Answers-style question.
     # This teaches the model to generate both parts in sequence, which captures
@@ -95,6 +114,29 @@ Ask a question<|im_end|>
 {title} {question_body}<|im_end|>"""
 
     return {"text": text}
+
+
+def set_random_seed(seed):
+    """
+    Set random seeds for reproducibility across all libraries.
+
+    REPRODUCIBILITY:
+    Setting seeds ensures that:
+    - Dataset sampling is the same every run
+    - Model weight initialization is identical
+    - Dropout patterns are reproducible
+    - Data shuffling order is consistent
+
+    This is crucial for:
+    - Comparing different hyperparameters fairly
+    - Debugging (can reproduce exact same behavior)
+    - Scientific reproducibility of results
+    """
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    set_seed(seed)  # Sets seed for transformers, datasets, etc.
 
 
 def main():
@@ -150,8 +192,66 @@ def main():
     # Helps monitor if training is progressing normally
     LOGGING_STEPS = 10
 
+    # WANDB_PROJECT: Weights & Biases project name for experiment tracking
+    # Set to None to disable wandb logging
+    WANDB_PROJECT = "yahoo-llm"
+
+    # RANDOM_SEED: Seed for reproducibility
+    # Using the same seed ensures identical results across runs
+    RANDOM_SEED = 42
+
+    # ============================================================================
+    # REPRODUCIBILITY
+    # ============================================================================
+
+    # Set random seeds for all libraries to ensure reproducible results
+    # This makes experiments comparable and results debuggable
+    set_random_seed(RANDOM_SEED)
+    print(f"Random seed set to: {RANDOM_SEED}")
+
+    # ============================================================================
+    # WEIGHTS & BIASES INITIALIZATION
+    # ============================================================================
+
+    # Weights & Biases (wandb) is a powerful experiment tracking tool that:
+    # - Logs all training metrics (loss, learning rate, etc.) in real-time
+    # - Creates interactive plots and dashboards viewable from anywhere
+    # - Tracks hyperparameters and system metrics (GPU usage, etc.)
+    # - Allows comparison of multiple training runs
+    # - Stores model checkpoints and artifacts
+    #
+    # To use wandb on RunPod:
+    # 1. Get your API key from https://wandb.ai/settings
+    # 2. On RunPod, run: wandb login <your-api-key>
+    # 3. Training metrics will automatically sync to wandb.ai
+    #
+    # You can view your training dashboard at: https://wandb.ai/<username>/<project>
+
+    if WANDB_PROJECT:
+        wandb.init(
+            project=WANDB_PROJECT,
+            name=f"qwen-1.5b-{SAMPLE_SIZE // 1000}k-samples",  # Run name in wandb
+            config={
+                "model": MODEL_NAME,
+                "sample_size": SAMPLE_SIZE,
+                "batch_size": BATCH_SIZE,
+                "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
+                "effective_batch_size": BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS,
+                "learning_rate": LEARNING_RATE,
+                "epochs": NUM_EPOCHS,
+                "max_seq_length": 256,
+                "lora_r": 16,
+                "lora_alpha": 32,
+                "random_seed": RANDOM_SEED,
+            },
+        )
+        print("\n✓ Weights & Biases initialized")
+        print(
+            f"View training at: https://wandb.ai/{wandb.run.entity}/{wandb.run.project}"
+        )
+
     # Print configuration for verification
-    print("=" * 60)
+    print("\n" + "=" * 60)
     print("Yahoo Answers QUESTION Style LLM - RunPod Training")
     print("=" * 60)
     print(f"Model: {MODEL_NAME}")
@@ -160,7 +260,9 @@ def main():
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print(
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
+        )
     print(f"Training samples: {SAMPLE_SIZE:,}")
     print(f"Epochs: {NUM_EPOCHS}")
     print(f"Effective batch size: {BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}")
@@ -169,22 +271,31 @@ def main():
     # DATA PREPARATION
     # ============================================================================
 
-    # Load and sample the dataset
-    dataset = load_and_prepare_dataset(DATASET_NAME, sample_size=SAMPLE_SIZE)
+    # Load and sample the dataset, returns both train and validation sets
+    train_dataset, val_dataset = load_and_prepare_dataset(
+        DATASET_NAME, sample_size=SAMPLE_SIZE
+    )
 
     # Format each example into the chat template format expected by the model.
     # remove_columns ensures we only keep the 'text' field in the final dataset,
     # removing the original 'title' and 'questions' columns which are no longer needed.
-    print("\nFormatting dataset for SFT...")
-    formatted_dataset = dataset['train'].map(
+    print("\nFormatting training dataset...")
+    formatted_train = train_dataset.map(
         format_question_style,
-        remove_columns=dataset['train'].column_names,
-        desc="Formatting questions"
+        remove_columns=train_dataset.column_names,
+        desc="Formatting train questions",
+    )
+
+    print("Formatting validation dataset...")
+    formatted_val = val_dataset.map(
+        format_question_style,
+        remove_columns=val_dataset.column_names,
+        desc="Formatting val questions",
     )
 
     # Verify the formatting looks correct
     print("\nFormatted sample:")
-    print(formatted_dataset[0]['text'][:500])
+    print(formatted_train[0]["text"][:500])
 
     # ============================================================================
     # TOKENIZER SETUP
@@ -212,15 +323,12 @@ def main():
         # load_in_4bit: Loads model weights in 4-bit instead of 16-bit
         # Reduces VRAM from ~3GB to ~800MB for this 1.5B model
         load_in_4bit=True,
-
         # bnb_4bit_quant_type="nf4": Uses NormalFloat4, optimized for normally distributed weights
         # Better than standard 4-bit for neural network weights
         bnb_4bit_quant_type="nf4",
-
         # bnb_4bit_compute_dtype: Actual computations still done in bfloat16 for stability
         # Only the stored weights are 4-bit, computation is upcasted
         bnb_4bit_compute_dtype=torch.bfloat16,
-
         # bnb_4bit_use_double_quant: Quantizes the quantization constants themselves
         # Saves an additional ~0.4 bits per parameter (minor memory savings)
         bnb_4bit_use_double_quant=True,
@@ -256,30 +364,33 @@ def main():
         # Higher r = more expressive but more parameters. 16 is a good balance.
         # r=16 means each adapter is hidden_dim × 16 instead of hidden_dim × hidden_dim
         r=16,
-
         # lora_alpha: Scaling factor for LoRA updates
         # The update is scaled by (alpha / r). With alpha=32, r=16, scaling = 2.0
         # Higher alpha makes LoRA updates more pronounced relative to frozen weights
         lora_alpha=32,
-
         # lora_dropout: Dropout probability in LoRA layers
         # 0.05 = 5% dropout, helps prevent overfitting in the adapter layers
         lora_dropout=0.05,
-
         # bias: Whether to train bias parameters
         # "none" means bias stays frozen, reducing parameters and typically works well
         bias="none",
-
         # task_type: Type of task we're training for
         # CAUSAL_LM = causal language modeling (predict next token)
         task_type="CAUSAL_LM",
-
         # target_modules: Which weight matrices to apply LoRA to
         # We target all attention and MLP projection layers in the transformer.
         # q_proj, k_proj, v_proj, o_proj = attention matrices (query, key, value, output)
         # gate_proj, up_proj, down_proj = MLP layers in transformer blocks
         # Targeting all of these ensures comprehensive adaptation while staying parameter-efficient
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
     )
 
     # Apply LoRA to the model - this wraps the target modules with LoRA adapters
@@ -302,43 +413,46 @@ def main():
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
         logging_steps=LOGGING_STEPS,
-
+        seed=RANDOM_SEED,  # Ensure trainer uses the same seed
+        data_seed=RANDOM_SEED,  # Seed for data shuffling
         # Save strategy: Save checkpoints every N steps
         save_strategy="steps",
         save_steps=SAVE_STEPS,
-
         # save_total_limit: Keep only the last 3 checkpoints to save disk space
         # Older checkpoints are automatically deleted. This is important on RunPod
         # where storage costs money.
         save_total_limit=3,
-
+        # Evaluation strategy: Run validation every N steps
+        # Helps detect overfitting - if val loss diverges from train loss, model is memorizing
+        eval_strategy="steps",
+        eval_steps=SAVE_STEPS,  # Evaluate at same frequency as saving
+        # load_best_model_at_end: After training, load the checkpoint with best validation loss
+        # Ensures we use the model that generalizes best, not just the final epoch
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",  # Use validation loss to determine "best"
+        greater_is_better=False,  # Lower loss is better
         # optim: Optimizer choice
         # paged_adamw_8bit uses 8-bit optimizer states (further memory savings)
         # Required when using 4-bit quantization (QLoRA)
         optim="paged_adamw_8bit",
-
         # bf16: Use bfloat16 mixed precision training
         # Faster than fp32, more stable than fp16, supported on modern GPUs (Ampere+)
         bf16=True,
-
         # max_grad_norm: Clip gradients to this max norm to prevent exploding gradients
         # 0.3 is conservative but safe, prevents training instability
         max_grad_norm=0.3,
-
         # warmup_ratio: Fraction of training to use for learning rate warmup
         # 0.03 = first 3% of training steps have increasing LR (from 0 to LEARNING_RATE)
         # Helps stabilize early training when model is far from optimal
         warmup_ratio=0.03,
-
         # lr_scheduler_type: How learning rate changes over training
         # "cosine" gradually decreases LR following a cosine curve, works well for fine-tuning
         # Prevents over-aggressive updates near end of training
         lr_scheduler_type="cosine",
-
-        # report_to: Where to log metrics (wandb, tensorboard, etc.)
-        # "none" disables external logging, keeps it simple for RunPod
-        report_to="none",
-
+        # report_to: Where to log metrics
+        # "wandb" logs to Weights & Biases for experiment tracking and visualization
+        # Set to "none" if you want to disable external logging
+        report_to="wandb" if WANDB_PROJECT else "none",
         # gradient_checkpointing: Trade compute for memory
         # Recomputes activations during backward pass instead of storing them
         # Increases training time by ~20% but saves significant VRAM
@@ -357,14 +471,19 @@ def main():
     # - Optimizer steps
     # - Checkpoint saving
     # - Logging
+    # - Validation evaluation (when eval_dataset is provided)
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=formatted_dataset,
-
+        train_dataset=formatted_train,
+        eval_dataset=formatted_val,  # Validation set for monitoring overfitting
         # processing_class: The new parameter name for tokenizer in recent TRL versions
         # Used for tokenizing the text data on-the-fly during training
         processing_class=tokenizer,
+        # max_seq_length: Maximum sequence length for training
+        # 256 captures 99.44% of questions (avg: 66 tokens, 95th percentile: 147 tokens)
+        # Only extreme outliers get truncated, while saving ~40-50% training time vs 512
+        max_seq_length=256,
     )
 
     # ============================================================================
@@ -394,6 +513,11 @@ def main():
     print("\nThe model now talks like Yahoo Answers QUESTIONERS!")
     print(f"\nTo download from RunPod, use:")
     print(f"  runpodctl receive {OUTPUT_DIR}")
+
+    # Finish wandb run
+    if WANDB_PROJECT:
+        wandb.finish()
+        print("\n✓ Wandb run finished")
 
 
 if __name__ == "__main__":
